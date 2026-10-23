@@ -1,0 +1,5 @@
+# release build output (attached to GitHub Releases, not committed)
+*.zip
+
+# BetterDiscord per-user data (settings, translation cache)
+*.config.json
