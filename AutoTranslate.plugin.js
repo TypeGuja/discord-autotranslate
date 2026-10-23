@@ -2,7 +2,7 @@
  * @name AutoTranslate
  * @author Type_Guja
  * @description Auto-translates Discord messages: incoming ones under the message, your own before sending. Google Translate, no API keys.
- * @version 1.5.0
+ * @version 1.5.1
  * @source https://github.com/TypeGuja/discord-autotranslate
  * @website https://github.com/TypeGuja/discord-autotranslate
  */
@@ -71,7 +71,8 @@ const STRINGS = {
         chNone: "Пока нет. Нажми ПКМ по каналу или личке, чтобы задать язык.",
         autoPeer: "Авто — как пишет собеседник",
         autoShort: "авто",
-        noPeer: "не понял язык собеседника, отправлено как есть"
+        noPeer: "не понял язык собеседника, отправлено как есть",
+        netFail: "Google не отвечает (%s) — проверь интернет/VPN"
     },
     en: {
         auto: "Auto",
@@ -115,7 +116,8 @@ const STRINGS = {
         chNone: "None yet. Right-click a channel or DM to set a language.",
         autoPeer: "Auto — match the other person",
         autoShort: "auto",
-        noPeer: "couldn't tell the other person's language, sent as is"
+        noPeer: "couldn't tell the other person's language, sent as is",
+        netFail: "Google is not responding (%s) — check your internet/VPN"
     }
 };
 
@@ -139,6 +141,35 @@ const SLANG = {
 
 // Куски, которые нельзя отдавать переводчику: код, упоминания/эмодзи/каналы, ссылки, спойлер-маркеры.
 const PROTECTED = /(```[\s\S]*?```|`[^`\n]+`|<a?:\w+:\d+>|<[@#][!&]?\d+>|<\/[\w ]+:\d+>|<t:\d+(?::\w)?>|https?:\/\/\S+|\|\|)/g;
+
+// BdApi.Net.fetch идёт мимо CSP Discord'а; обычный fetch — запасной вариант.
+async function getJson(url) {
+    const resp = await (BdApi.Net?.fetch ?? fetch)(url);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    try {
+        return await resp.json();
+    } catch (e) {
+        throw new Error("blocked"); // вместо JSON пришла HTML-страница Google «Sorry…»
+    }
+}
+
+const query = (text, sl, tl) => `&sl=${encodeURIComponent(sl)}&tl=${encodeURIComponent(tl)}&q=${encodeURIComponent(text)}`;
+
+// Адреса Google Translate без ключа; оба отдают {text, src}.
+const ENDPOINTS = [
+    async (text, sl, tl) => {
+        const data = await getJson("https://translate.googleapis.com/translate_a/single?client=gtx&dt=t" + query(text, sl, tl));
+        return { text: (data[0] || []).map(p => p[0]).join(""), src: data[2] || sl };
+    },
+    // sl=auto -> [["перевод","язык"]], заданный sl -> ["перевод"]
+    async (text, sl, tl) => {
+        const data = await getJson("https://clients5.google.com/translate_a/t?client=dict-chrome-ex" + query(text, sl, tl));
+        const first = data[0];
+        if (Array.isArray(first)) return { text: first[0], src: first[1] || sl };
+        if (typeof first === "string") return { text: first, src: sl };
+        throw new Error("bad response");
+    }
+];
 
 const CACHE_FILE = "AutoTranslate.cache"; // -> plugins/AutoTranslate.cache.config.json
 const CACHE_MAX = 5000;                     // записей; самые старые вытесняются
@@ -273,18 +304,26 @@ module.exports = class AutoTranslate {
         }
     }
 
+    // Сначала адрес, который сработал последним. Основной (gtx) Google часто блокирует
+    // для VPN/хостинговых IP («Sorry… automated queries»), запасной (dict-chrome-ex) — нет.
     async request(text, sl, tl) {
-        const url = "https://translate.googleapis.com/translate_a/single?client=gtx&dt=t"
-            + `&sl=${encodeURIComponent(sl)}&tl=${encodeURIComponent(tl)}&q=${encodeURIComponent(text)}`;
-        // BdApi.Net.fetch идёт мимо CSP Discord'а; обычный fetch — запасной вариант.
-        const doFetch = BdApi.Net?.fetch ?? fetch;
-        const resp = await doFetch(url);
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        const data = await resp.json();
-        return {
-            text: (data[0] || []).map(p => p[0]).join(""),
-            src: data[2] || sl
-        };
+        const order = this.endpoint === 1 ? [1, 0] : [0, 1];
+        let lastErr;
+        for (const i of order) {
+            try {
+                const r = await ENDPOINTS[i](text, sl, tl);
+                this.endpoint = i;
+                this.failNotified = false;
+                return r;
+            } catch (e) {
+                lastErr = e;
+            }
+        }
+        if (!this.failNotified) {
+            this.failNotified = true;
+            BdApi.UI.showToast(`AutoTranslate: ${this.t("netFail", lastErr.message)}`, { type: "error" });
+        }
+        throw lastErr;
     }
 
     // ---------- сленг ----------
