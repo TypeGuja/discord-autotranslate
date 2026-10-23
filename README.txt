@@ -27,6 +27,8 @@ AutoTranslate — автопереводчик для Discord (плагин Bett
 Замечания
   - Клиентские моды формально против правил Discord (на практике не банят).
   - При очень большом числе запросов Google может временно ограничить перевод.
+  - Через VPN основной адрес Google часто блокируется — плагин сам переходит
+    на запасной. Если не работает ни один, появится уведомление.
 
 ----------------------------------------------------------------------
 
@@ -59,3 +61,5 @@ Install
 Notes
   - Client mods are technically against Discord's ToS (bans are very rare).
   - With a very high volume of requests Google may rate-limit for a while.
+  - Behind a VPN Google often blocks the main endpoint; the plugin switches to
+    a backup one by itself. If neither works, you get a notification.
